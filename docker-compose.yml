@@ -1,0 +1,21 @@
+# Local development (Phase 2). Run: docker compose up --build
+services:
+  inference:
+    build: ./inference
+    image: tinyllama-inference:local
+    restart: unless-stopped
+    # Not published to the host — only the API talks to it.
+
+  api:
+    build: ./api
+    image: tinyllama-api:local
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      OLLAMA_URL: http://inference:11434
+      MODEL_NAME: tinyllama
+      S3_BUCKET: ${S3_BUCKET:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+    depends_on:
+      - inference

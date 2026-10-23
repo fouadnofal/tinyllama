@@ -1,0 +1,38 @@
+# Used on EC2. Images come from ECR; logs go to CloudWatch via the awslogs driver.
+# Env vars are written to /opt/app/.env by the EC2 user-data script.
+x-logging: &cw
+  driver: awslogs
+  options:
+    awslogs-region: ${AWS_REGION}
+    awslogs-group: ${LOG_GROUP}
+    awslogs-create-group: "false"
+
+services:
+  inference:
+    image: ${ECR_REGISTRY}/tinyllama-inference:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    logging:
+      <<: *cw
+      options:
+        awslogs-region: ${AWS_REGION}
+        awslogs-group: ${LOG_GROUP}
+        awslogs-stream: inference
+
+  api:
+    image: ${ECR_REGISTRY}/tinyllama-api:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "80:8000"
+    environment:
+      OLLAMA_URL: http://inference:11434
+      MODEL_NAME: tinyllama
+      S3_BUCKET: ${S3_BUCKET}
+      AWS_REGION: ${AWS_REGION}
+    depends_on:
+      - inference
+    logging:
+      <<: *cw
+      options:
+        awslogs-region: ${AWS_REGION}
+        awslogs-group: ${LOG_GROUP}
+        awslogs-stream: api

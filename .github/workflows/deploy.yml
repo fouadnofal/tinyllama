@@ -1,0 +1,57 @@
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # OIDC to AWS — no long-lived access keys in GitHub
+  contents: read
+
+env:
+  AWS_REGION: us-east-1   # keep in sync with infra region
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push API image
+        run: |
+          REG=${{ steps.ecr.outputs.registry }}
+          docker build -t $REG/tinyllama-api:${{ github.sha }} -t $REG/tinyllama-api:latest ./api
+          docker push --all-tags $REG/tinyllama-api
+
+      - name: Build & push inference image (only when it changed)
+        run: |
+          REG=${{ steps.ecr.outputs.registry }}
+          if git diff --quiet HEAD~1 HEAD -- inference/ 2>/dev/null && \
+             aws ecr describe-images --repository-name tinyllama-inference --image-ids imageTag=latest >/dev/null 2>&1; then
+            echo "inference unchanged, skipping"
+          else
+            docker build -t $REG/tinyllama-inference:latest ./inference
+            docker push $REG/tinyllama-inference:latest
+          fi
+
+      - name: Deploy to EC2 via SSM
+        run: |
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids ${{ secrets.EC2_INSTANCE_ID }} \
+            --document-name AWS-RunShellScript \
+            --parameters 'commands=["/opt/app/deploy.sh"]' \
+            --query Command.CommandId --output text)
+          aws ssm wait command-executed --command-id $CMD_ID --instance-id ${{ secrets.EC2_INSTANCE_ID }}
+          aws ssm get-command-invocation --command-id $CMD_ID --instance-id ${{ secrets.EC2_INSTANCE_ID }} \
+            --query '[Status, StandardOutputContent]' --output text

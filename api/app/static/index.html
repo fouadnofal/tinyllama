@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TinyLlama Chat</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1c1f24; --muted:#6b7280; --accent:#2563eb; --border:#e5e7eb; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111317; --card:#1b1e24; --text:#e8eaed; --muted:#9aa0a6; --accent:#60a5fa; --border:#2c3038; } }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:760px; margin:0 auto; padding:16px; display:flex; flex-direction:column; height:100vh; }
+  header { display:flex; justify-content:space-between; align-items:center; padding:8px 0 12px; }
+  h1 { font-size:18px; margin:0; }
+  #status { font-size:12px; color:var(--muted); }
+  #log { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:10px; padding:8px 0; }
+  .msg { padding:10px 14px; border-radius:12px; max-width:85%; white-space:pre-wrap; line-height:1.45; }
+  .user { align-self:flex-end; background:var(--accent); color:#fff; }
+  .assistant { align-self:flex-start; background:var(--card); border:1px solid var(--border); }
+  .meta { font-size:11px; color:var(--muted); margin-top:4px; }
+  form { display:flex; gap:8px; padding-top:12px; }
+  textarea { flex:1; resize:none; padding:10px; border-radius:10px; border:1px solid var(--border); background:var(--card); color:var(--text); font:inherit; }
+  button { padding:0 16px; border:0; border-radius:10px; background:var(--accent); color:#fff; font:inherit; cursor:pointer; }
+  button.secondary { background:transparent; color:var(--accent); border:1px solid var(--border); }
+  button:disabled { opacity:.5; cursor:default; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>TinyLlama Chat</h1><div id="status">checking…</div></div>
+    <button class="secondary" id="export" type="button">Export to S3</button>
+  </header>
+  <div id="log"></div>
+  <form id="form">
+    <textarea id="input" rows="2" placeholder="Ask something…" required></textarea>
+    <button id="send">Send</button>
+  </form>
+</main>
+<script>
+const history = [{ role: "system", content: "You are a helpful, concise assistant." }];
+const log = document.getElementById("log"), input = document.getElementById("input"), send = document.getElementById("send");
+
+function add(role, text, meta) {
+  const el = document.createElement("div");
+  el.className = "msg " + role;
+  el.textContent = text;
+  if (meta) { const m = document.createElement("div"); m.className = "meta"; m.textContent = meta; el.appendChild(m); }
+  log.appendChild(el); log.scrollTop = log.scrollHeight;
+}
+
+fetch("/health").then(r => r.json()).then(h => {
+  document.getElementById("status").textContent = h.inference ? "model ready" : "model loading…";
+  document.getElementById("export").disabled = !h.s3_export;
+}).catch(() => document.getElementById("status").textContent = "API unreachable");
+
+document.getElementById("form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const text = input.value.trim(); if (!text) return;
+  add("user", text); history.push({ role: "user", content: text });
+  input.value = ""; send.disabled = true;
+  try {
+    const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: history.slice(-20) }) });
+    if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+    const d = await r.json();
+    history.push({ role: "assistant", content: d.reply });
+    add("assistant", d.reply, `${d.latency_ms} ms · ${d.output_tokens} tokens`);
+  } catch (err) { add("assistant", "Error: " + err.message); }
+  send.disabled = false; input.focus();
+});
+
+input.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); document.getElementById("form").requestSubmit(); } });
+
+document.getElementById("export").addEventListener("click", async () => {
+  const r = await fetch("/api/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: history }) });
+  const d = await r.json();
+  alert(r.ok ? `Saved to s3://${d.bucket}/${d.key}` : d.detail);
+});
+</script>
+</body>
+</html>
